@@ -1,0 +1,80 @@
+name: Build macOS Application
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-macos:
+    runs-on: macos-14
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install PySide6 playwright requests pyinstaller cryptography urllib3
+          python -m playwright install --with-deps chromium
+
+      - name: Build macOS .app with PyInstaller
+        run: |
+          pyinstaller GoogleSitesPoster_Mac.spec --clean --noconfirm
+
+      - name: Prepare Release Package
+        run: |
+          mkdir -p dist/GoogleSitesPoster_macOS
+          cp -R dist/GoogleSitesPoster.app dist/GoogleSitesPoster_macOS/
+          cp -R images dist/GoogleSitesPoster_macOS/
+          cat << 'EOF' > dist/GoogleSitesPoster_macOS/README_MAC.txt
+=============================================================
+Google Sites Automated Poster - macOS Release
+=============================================================
+
+HOW TO RUN ON macOS:
+1. Drag 'GoogleSitesPoster.app' and 'images' folder to your Desktop or Applications folder.
+2. Google Chrome must be installed on your Mac.
+3. If macOS Gatekeeper shows "App is damaged" or "Unidentified Developer", open Terminal and run this one-time command:
+   
+   xattr -cr /Applications/GoogleSitesPoster.app
+   (or replace with the actual path where you placed the app)
+
+4. Double-click GoogleSitesPoster.app to launch!
+=============================================================
+EOF
+          cd dist
+          zip -r -y GoogleSitesPoster_macOS.zip GoogleSitesPoster_macOS
+
+      - name: Upload macOS Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GoogleSitesPoster_macOS
+          path: dist/GoogleSitesPoster_macOS.zip
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        with:
+          tag_name: macos-v2.0-${{ github.run_number }}
+          name: Google Sites Poster macOS v2.0 (Build #${{ github.run_number }})
+          body: |
+            ## Google Sites Poster Suite for macOS
+            - Native Apple Silicon / macOS .app bundle.
+            - Fully compatible with Grok 4.3 and DeepSeek AI engines.
+            - Includes template image folders and license authentication.
+            
+            **Download the attached `GoogleSitesPoster_macOS.zip` below.**
+          files: dist/GoogleSitesPoster_macOS.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
