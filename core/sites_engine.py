@@ -754,7 +754,10 @@ class GoogleSitesAutomator:
                 self.page.keyboard.insert_text(clean_name)
                 self.page.wait_for_timeout(200)
                 self.page.keyboard.press("Enter")
-                self.page.wait_for_timeout(500)
+                self.page.wait_for_timeout(300)
+                # Dismiss 'Add logo' popover and blur canvas site name
+                self.page.keyboard.press("Escape")
+                self.page.wait_for_timeout(300)
                 self.log(f"[SUCCESS] Canvas Site Name set to: '{clean_name}'")
         except Exception as e:
             self.log(f"[HEADER] Notice setting canvas site name: {e}")
@@ -767,8 +770,20 @@ class GoogleSitesAutomator:
             clean_title = enforce_title_60_70(clean_title)
         self.log(f"[HEADER] Setting Header Title ({len(clean_title)} chars) to: '{clean_title}'...")
         try:
-            # Locate header title element (covers un-focused lf5WFf, contenteditable, and heading)
+            # 1. Dismiss any open popovers from previous interactions
+            self.page.keyboard.press("Escape")
+            self.page.wait_for_timeout(200)
+
+            # 2. Scroll canvas to top so header is in view
+            try:
+                self.page.evaluate("() => window.scrollTo(0, 0)")
+            except Exception:
+                pass
+            self.page.wait_for_timeout(200)
+
+            # 3. Locate header title element (covers un-focused lf5WFf, contenteditable, and heading)
             title_el = self.page.locator(
+                "header [contenteditable='true'], "
                 "section:first-of-type div.lf5WFf, "
                 "section:first-of-type div[aria-label='Text'], "
                 "section:first-of-type [contenteditable='true'], "
@@ -780,21 +795,34 @@ class GoogleSitesAutomator:
                 except Exception:
                     pass
                 title_el.click(force=True)
-                self.page.wait_for_timeout(200)
-                self.page.keyboard.press("Enter")
+                self.page.wait_for_timeout(300)
             else:
                 self.page.mouse.click(500, 220)
-                self.page.wait_for_timeout(200)
-                self.page.keyboard.press("Enter")
-            self.page.wait_for_timeout(250)
+                self.page.wait_for_timeout(300)
+
             self.page.keyboard.press("Control+A")
             self.page.wait_for_timeout(100)
             
-            # Native insert_text works 100% reliably in Headless mode (doesn't rely on OS clipboard)
-            self.page.keyboard.insert_text(clean_title)
+            # Type title directly replacing selected placeholder without deleting text node
+            self.page.keyboard.type(clean_title, delay=8)
             self.page.wait_for_timeout(300)
+
+            # Verification: ensure title text actually persisted
+            current_h1 = ""
+            try:
+                current_h1 = title_el.inner_text().strip()
+            except Exception:
+                pass
+            if not current_h1 or clean_title[:20] not in current_h1:
+                self.log("[HEADER] Direct type was empty, attempting clipboard paste fallback...")
+                title_el.click(force=True)
+                self.page.keyboard.press("Control+A")
+                set_windows_clipboard_text(clean_title)
+                self.page.keyboard.press("Control+V")
+                self.page.wait_for_timeout(300)
+
             self.page.keyboard.press("Escape")
-            self.page.wait_for_timeout(500)
+            self.page.wait_for_timeout(400)
             self.log(f"[SUCCESS] Header Title set to: '{clean_title}'")
         except Exception as e:
             self.log(f"[HEADER] Error setting header title: {e}")
@@ -806,17 +834,15 @@ class GoogleSitesAutomator:
             editor_locator.click(force=True)
             self.page.wait_for_timeout(200)
 
-            # Native insert_text dispatches directly into the contenteditable element (works in Headless & Headed)
+            # 1. Primary: Native insert_text dispatches directly into the contenteditable element
             try:
                 self.page.keyboard.insert_text(text)
             except Exception:
                 set_windows_clipboard_text(text)
                 self.page.keyboard.press("Control+V")
             self.page.wait_for_timeout(300)
-        except Exception as e:
-            self.log(f"[EDITOR] Error entering text: {e}")
 
-            # 4. Verify text was received in editor
+            # 2. Verification (outside except, always runs!)
             current_text = ""
             try:
                 current_text = editor_locator.inner_text().strip()
@@ -824,15 +850,28 @@ class GoogleSitesAutomator:
                 pass
 
             if not current_text:
-                self.log("[PASTE] Direct paste was empty, typing text via keyboard...")
-                self.page.keyboard.type(text, delay=5)
+                self.log("[PASTE] Direct insert was empty, attempting clipboard paste fallback...")
+                set_windows_clipboard_text(text)
+                self.page.keyboard.press("Control+V")
+                self.page.wait_for_timeout(300)
+                try:
+                    current_text = editor_locator.inner_text().strip()
+                except Exception:
+                    pass
+
+            if not current_text:
+                self.log("[PASTE] Clipboard empty, typing text via keyboard fallback...")
+                self.page.keyboard.type(text, delay=3)
                 self.page.wait_for_timeout(200)
             else:
                 self.log(f"[PASTE] Successfully pasted {len(text)} characters into editor.")
 
         except Exception as e:
             self.log(f"[PASTE] Notice on paste into editor: {e}")
-            self.page.keyboard.type(text, delay=8)
+            try:
+                self.page.keyboard.type(text, delay=5)
+            except Exception:
+                pass
 
     def set_section_color(self, style_name: str = "Style 3", target_element=None):
         """
@@ -1166,7 +1205,7 @@ class GoogleSitesAutomator:
 
             # 2. Ensure Insert tab is active and sidebar is at top
             insert_tab = self.page.locator("div[role='tab']:has-text('Insert'), [aria-label*='Insert' i]").first
-            if insert_tab.count() > 0:
+            if insert_tab.count() > 0 and insert_tab.is_visible():
                 insert_tab.click(force=True)
                 self.page.wait_for_timeout(250)
             self._scroll_sidebar_top()
@@ -1185,41 +1224,49 @@ class GoogleSitesAutomator:
 
             if text_btn.is_visible():
                 text_btn.click(force=True)
-                self.page.wait_for_timeout(900)
+                self.page.wait_for_timeout(1000)
 
-            # 3. Target the newly created text box (must be EMPTY)
-            box_selector = "div[role='main'] div[contenteditable='true']:visible, div[contenteditable='true']:visible"
+            # 3. Enter edit mode on the newly placed text tile
+            # In Google Sites, when a text box is newly added, pressing Enter immediately
+            # activates edit mode and places the cursor into the contenteditable textbox!
+            self.page.keyboard.press("Enter")
+            self.page.wait_for_timeout(350)
+
+            combined_text = "\n\n".join([p.strip() for p in paragraphs if p.strip()])
+
+            # Check if active element is already a textbox or contenteditable
+            is_active = self.page.evaluate("""() => {
+                const el = document.activeElement;
+                return (el && (el.isContentEditable || el.getAttribute('role') === 'textbox'));
+            }""")
+
+            # Target the contenteditable editor box on canvas
+            box_selector = "div[role='main'] div[role='textbox'], div[role='main'] div[contenteditable='true'], div[contenteditable='true']:visible"
             editor_box = self.page.locator(box_selector).last
 
-            # Empty-box guard
-            for _ in range(30):
+            if is_active:
                 try:
-                    if len(editor_box.inner_text().strip()) == 0:
-                        break
+                    self.page.keyboard.insert_text(combined_text)
+                    self.page.wait_for_timeout(400)
                 except Exception:
                     pass
-                self.page.wait_for_timeout(100)
-                editor_box = self.page.locator(box_selector).last
 
-            # Re-click safety fallback if new text box didn't spawn
-            try:
-                if editor_box.count() > 0 and len(editor_box.inner_text().strip()) > 0:
-                    self.log("[CONTENT] [SAFETY] Last text box is not empty. Re-clicking 'Text box' button...")
-                    self._scroll_sidebar_top()
-                    if text_btn.is_visible():
-                        text_btn.click(force=True)
-                        self.page.wait_for_timeout(1200)
-                    editor_box = self.page.locator(box_selector).last
-            except Exception:
-                pass
+                # Check if canvas received the text
+                canvas_text = ""
+                try:
+                    canvas_text = self.page.locator("div[role='main']").inner_text()
+                except Exception:
+                    pass
+                if paragraphs[0] not in canvas_text and editor_box.count() > 0:
+                    self.paste_text_into_editor(editor_box, combined_text)
+            else:
+                if editor_box.count() > 0:
+                    self.paste_text_into_editor(editor_box, combined_text)
+                else:
+                    self.page.keyboard.type(combined_text, delay=3)
 
-            if editor_box.count() > 0 and editor_box.is_visible():
-                combined_text = "\n\n".join([p.strip() for p in paragraphs if p.strip()])
-                self.paste_text_into_editor(editor_box, combined_text)
-                self.page.wait_for_timeout(350)
-
-                if section_style:
-                    self.set_section_color(section_style, target_element=editor_box)
+            if section_style and editor_box.count() > 0:
+                self.set_section_color(section_style, target_element=editor_box)
 
             # Deselect cleanly
             self.page.keyboard.press("Escape")
