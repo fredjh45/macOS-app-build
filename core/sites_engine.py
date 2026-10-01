@@ -7,6 +7,7 @@ All log outputs formatted with clean professional tags without emojis.
 """
 
 import os
+import sys
 import re
 import time
 import logging
