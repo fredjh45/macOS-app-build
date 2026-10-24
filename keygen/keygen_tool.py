@@ -31,7 +31,8 @@ class KeygenWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Google Sites Poster - Admin License Keygen & Manager")
-        self.setFixedSize(860, 680)
+        self.resize(960, 680)
+        self.setMinimumSize(920, 600)
         self.setStyleSheet("""
             QMainWindow, QWidget {
                 background-color: #1a1b26;
@@ -87,11 +88,36 @@ class KeygenWindow(QMainWindow):
             QPushButton#revokeBtn {
                 background-color: #f7768e;
                 color: #15161e;
-                padding: 4px 10px;
+                font-weight: bold;
+                padding: 4px 12px;
                 font-size: 11px;
+                border-radius: 4px;
             }
             QPushButton#revokeBtn:hover {
                 background-color: #ff9eaf;
+            }
+            QPushButton#unblockBtn {
+                background-color: #9ece6a;
+                color: #15161e;
+                font-weight: bold;
+                padding: 4px 10px;
+                font-size: 11px;
+                border-radius: 4px;
+            }
+            QPushButton#unblockBtn:hover {
+                background-color: #b9f27c;
+            }
+            QPushButton#deleteBtn {
+                background-color: #414868;
+                color: #c0caf5;
+                font-weight: bold;
+                padding: 4px 10px;
+                font-size: 11px;
+                border-radius: 4px;
+            }
+            QPushButton#deleteBtn:hover {
+                background-color: #f7768e;
+                color: #15161e;
             }
             QTableWidget {
                 background-color: #16161e;
@@ -204,9 +230,12 @@ class KeygenWindow(QMainWindow):
         self.table.setColumnCount(6)
         self.table.setHorizontalHeaderLabels(["ID", "Client Name", "License Key", "Hardware ID", "Status", "Action"])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
         table_layout.addWidget(self.table)
 
         main_layout.addWidget(table_box)
@@ -273,7 +302,7 @@ class KeygenWindow(QMainWindow):
                     name = str(row.get("client_name", ""))
                     key = str(row.get("license_key", ""))
                     hwid = str(row.get("hardware_id", ""))
-                    status = str(row.get("status", ""))
+                    status = str(row.get("status", "")).upper()
                     tamper = row.get("tamper_detected", False)
 
                     self.table.setItem(i, 0, QTableWidgetItem(rec_id))
@@ -288,35 +317,88 @@ class KeygenWindow(QMainWindow):
                         status_item.setForeground(Qt.red)
                     self.table.setItem(i, 4, status_item)
 
-                    # Action Button (Revoke)
-                    revoke_btn = QPushButton("Revoke" if status == "ACTIVE" else "Delete")
-                    revoke_btn.setObjectName("revokeBtn")
-                    revoke_btn.clicked.connect(lambda ch, k=key, st=status: self._toggle_revoke(k, st))
-                    self.table.setCellWidget(i, 5, revoke_btn)
+                    # Action buttons container
+                    act_widget = QWidget()
+                    act_layout = QHBoxLayout(act_widget)
+                    act_layout.setContentsMargins(4, 2, 4, 2)
+                    act_layout.setSpacing(6)
+
+                    if status == "ACTIVE" and not tamper:
+                        revoke_btn = QPushButton("Revoke")
+                        revoke_btn.setObjectName("revokeBtn")
+                        revoke_btn.setToolTip("Block / Revoke this license key")
+                        revoke_btn.clicked.connect(lambda ch, k=key: self._revoke_license(k))
+                        act_layout.addWidget(revoke_btn)
+                    else:
+                        unblock_btn = QPushButton("✓ Unblock")
+                        unblock_btn.setObjectName("unblockBtn")
+                        unblock_btn.setToolTip("Unblock / Reactivate this license key")
+                        unblock_btn.clicked.connect(lambda ch, k=key: self._unblock_license(k))
+                        act_layout.addWidget(unblock_btn)
+
+                        del_btn = QPushButton("Delete")
+                        del_btn.setObjectName("deleteBtn")
+                        del_btn.setToolTip("Permanently remove record from database")
+                        del_btn.clicked.connect(lambda ch, k=key: self._delete_license(k))
+                        act_layout.addWidget(del_btn)
+
+                    self.table.setCellWidget(i, 5, act_widget)
         except Exception as e:
             pass
 
-    def _toggle_revoke(self, license_key: str, current_status: str):
-        if current_status == "ACTIVE":
-            confirm = QMessageBox.question(
-                self, "Revoke License",
-                f"Are you sure you want to REVOKE license '{license_key}'?\nThe client software will instantly lock up and self-corrupt on next run!",
-                QMessageBox.Yes | QMessageBox.No
-            )
-            if confirm == QMessageBox.Yes:
-                url = f"{SUPABASE_URL}/rest/v1/licenses?license_key=eq.{license_key}"
-                requests.patch(url, headers=HEADERS, json={"status": "REVOKED", "tamper_detected": True})
-                self._refresh_licenses_table()
-        else:
-            confirm = QMessageBox.question(
-                self, "Delete Record",
-                f"Permanently delete license '{license_key}' from Supabase?",
-                QMessageBox.Yes | QMessageBox.No
-            )
-            if confirm == QMessageBox.Yes:
-                url = f"{SUPABASE_URL}/rest/v1/licenses?license_key=eq.{license_key}"
-                requests.delete(url, headers=HEADERS)
-                self._refresh_licenses_table()
+    def _revoke_license(self, license_key: str):
+        confirm = QMessageBox.question(
+            self, "Revoke License",
+            f"Are you sure you want to REVOKE license '{license_key}'?\n\nThe client software will instantly lock up and stop working on next run!",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if confirm == QMessageBox.Yes:
+            url = f"{SUPABASE_URL}/rest/v1/licenses?license_key=eq.{license_key}"
+            try:
+                r = requests.patch(url, headers=HEADERS, json={"status": "REVOKED", "tamper_detected": True}, timeout=8)
+                if r.status_code in (200, 204):
+                    QMessageBox.information(self, "Revoked", f"License '{license_key}' is now REVOKED and blocked.")
+                else:
+                    QMessageBox.warning(self, "Error", f"Failed to revoke license: {r.text}")
+            except Exception as e:
+                QMessageBox.critical(self, "Network Error", f"Failed to connect to Supabase: {e}")
+            self._refresh_licenses_table()
+
+    def _unblock_license(self, license_key: str):
+        confirm = QMessageBox.question(
+            self, "Unblock / Reactivate License",
+            f"Are you sure you want to UNBLOCK license '{license_key}'?\n\nThis will restore the license status to ACTIVE and clear any block/tamper flags. The client will be able to use the software again immediately.",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if confirm == QMessageBox.Yes:
+            url = f"{SUPABASE_URL}/rest/v1/licenses?license_key=eq.{license_key}"
+            try:
+                r = requests.patch(url, headers=HEADERS, json={"status": "ACTIVE", "tamper_detected": False}, timeout=8)
+                if r.status_code in (200, 204):
+                    QMessageBox.information(self, "Unblocked", f"License '{license_key}' is now ACTIVE and unblocked!")
+                else:
+                    QMessageBox.warning(self, "Error", f"Failed to unblock license: {r.text}")
+            except Exception as e:
+                QMessageBox.critical(self, "Network Error", f"Failed to connect to Supabase: {e}")
+            self._refresh_licenses_table()
+
+    def _delete_license(self, license_key: str):
+        confirm = QMessageBox.question(
+            self, "Delete Record",
+            f"Permanently delete license '{license_key}' from Supabase?\n\nThis action cannot be undone.",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if confirm == QMessageBox.Yes:
+            url = f"{SUPABASE_URL}/rest/v1/licenses?license_key=eq.{license_key}"
+            try:
+                r = requests.delete(url, headers=HEADERS, timeout=8)
+                if r.status_code in (200, 204):
+                    QMessageBox.information(self, "Deleted", f"License '{license_key}' permanently deleted.")
+                else:
+                    QMessageBox.warning(self, "Error", f"Failed to delete license: {r.text}")
+            except Exception as e:
+                QMessageBox.critical(self, "Network Error", f"Failed to connect to Supabase: {e}")
+            self._refresh_licenses_table()
 
 def main():
     app = QApplication(sys.argv)
