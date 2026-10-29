@@ -1197,14 +1197,14 @@ class GoogleSitesAutomator:
             self.log(f"[HEADING] Error adding H2 heading section: {e}")
 
     def add_normal_text_box(self, paragraphs: List[str], section_style: Optional[str] = None):
-        """Adds a normal text box with clean paragraph spacing using instant paste, optionally setting section color."""
+        """Adds a normal text box with clean paragraph spacing using real keyboard commits, optionally setting section color."""
         self.log(f"[CONTENT] Adding text box with {len(paragraphs)} paragraph(s)...")
         try:
             # 1. Canvas preparation: scroll to bottom
             self._prepare_canvas_for_new_section()
 
             # 2. Ensure Insert tab is active and sidebar is at top
-            insert_tab = self.page.locator("div[role='tab']:has-text('Insert'), [aria-label*='Insert' i]").first
+            insert_tab = self.page.locator("button[role='tab']:has-text('Insert'), [role='tab']:has-text('Insert')").first
             if insert_tab.count() > 0 and insert_tab.is_visible():
                 insert_tab.click(force=True)
                 self.page.wait_for_timeout(250)
@@ -1212,8 +1212,9 @@ class GoogleSitesAutomator:
             self.page.wait_for_timeout(200)
 
             text_btn = self.page.locator(
-                "div[role='tabpanel'] div[role='button']:has-text('Text box'), "
-                "div[role='button']:has-text('Text box'), "
+                "[jsname='OgE6b'], "
+                "[role='menuitem'][aria-label='Text box'], "
+                "div[role='tabpanel'] [aria-label*='Text box' i], "
                 "[aria-label*='Text box' i]"
             ).first
 
@@ -1226,51 +1227,44 @@ class GoogleSitesAutomator:
                 text_btn.click(force=True)
                 self.page.wait_for_timeout(1000)
 
-            # 3. Enter edit mode on the newly placed text tile
-            # In Google Sites, when a text box is newly added, pressing Enter immediately
-            # activates edit mode and places the cursor into the contenteditable textbox!
-            self.page.keyboard.press("Enter")
-            self.page.wait_for_timeout(350)
-
-            combined_text = "\n\n".join([p.strip() for p in paragraphs if p.strip()])
-
-            # Check if active element is already a textbox or contenteditable
-            is_active = self.page.evaluate("""() => {
-                const el = document.activeElement;
-                return (el && (el.isContentEditable || el.getAttribute('role') === 'textbox'));
-            }""")
-
-            # Target the contenteditable editor box on canvas
-            box_selector = "div[role='main'] div[role='textbox'], div[role='main'] div[contenteditable='true'], div[contenteditable='true']:visible"
+            # 3. Target the newly created text box (wait for empty box)
+            box_selector = "div[role='main'] div[contenteditable='true']:visible, div[contenteditable='true']:visible"
             editor_box = self.page.locator(box_selector).last
 
-            if is_active:
+            for _ in range(30):
                 try:
-                    self.page.keyboard.insert_text(combined_text)
-                    self.page.wait_for_timeout(400)
+                    if len(editor_box.inner_text().strip()) == 0:
+                        break
                 except Exception:
                     pass
+                self.page.wait_for_timeout(100)
+                editor_box = self.page.locator(box_selector).last
 
-                # Check if canvas received the text
-                canvas_text = ""
-                try:
-                    canvas_text = self.page.locator("div[role='main']").inner_text()
-                except Exception:
-                    pass
-                if paragraphs[0] not in canvas_text and editor_box.count() > 0:
-                    self.paste_text_into_editor(editor_box, combined_text)
-            else:
-                if editor_box.count() > 0:
-                    self.paste_text_into_editor(editor_box, combined_text)
-                else:
-                    self.page.keyboard.type(combined_text, delay=3)
+            try:
+                editor_box.click(force=True, timeout=3000)
+                self.page.wait_for_timeout(200)
+            except Exception as e:
+                self.log(f"[CONTENT] Notice focusing normal text box: {e}")
+
+            # 4. Insert paragraphs with real keystroke typing (works 100% in headless & headed)
+            for p_idx, p in enumerate(paragraphs):
+                clean_p = p.strip()
+                if not clean_p:
+                    continue
+                if p_idx > 0:
+                    self.page.keyboard.press("Enter")
+                    self.page.wait_for_timeout(150)
+                self.page.keyboard.type(clean_p, delay=2)
+                self.page.wait_for_timeout(150)
+
+            self.page.wait_for_timeout(300)
 
             if section_style and editor_box.count() > 0:
                 self.set_section_color(section_style, target_element=editor_box)
 
             # Deselect cleanly
             self.page.keyboard.press("Escape")
-            self.page.wait_for_timeout(200)
+            self.page.wait_for_timeout(300)
 
         except Exception as e:
             self.log(f"[CONTENT] Error adding normal text box: {e}")
@@ -1794,7 +1788,7 @@ class GoogleSitesAutomator:
             self.log(f"[RESIZE] Notice resizing element to full width: {e}")
 
     def add_image_element(self, image_path: str, make_full_width: bool = True):
-        """BUG 8 fix — Scroll sidebar to top before locating Images widget."""
+        """Uploads image to canvas from right sidebar with bulletproof locators and file input fallback."""
         if not os.path.exists(image_path):
             return
         self.log(f"[IMAGE] Uploading image: {os.path.basename(image_path)}...")
@@ -1802,54 +1796,68 @@ class GoogleSitesAutomator:
             self._prepare_canvas_for_new_section()
 
             # Insert tab
-            insert_tab = self.page.locator("div[role='tab']:has-text('Insert')").first
-            if insert_tab.count() > 0:
+            insert_tab = self.page.locator("button[role='tab']:has-text('Insert'), [role='tab']:has-text('Insert')").first
+            if insert_tab.count() > 0 and insert_tab.is_visible():
                 insert_tab.click(force=True)
                 self.page.wait_for_timeout(300)
 
-            # BUG 8 fix — sidebar top
             self._scroll_sidebar_top()
-            self.page.wait_for_timeout(400)
+            self.page.wait_for_timeout(300)
 
-            # Sidebar-scoped Images button
-            sidebar = self.page.locator(
-                "div[role='tabpanel'], div.p6n-insert-panel, aside"
+            # Sidebar Images button (Google Sites uses role='menuitem' and jsname='wZQ6P')
+            images_btn = self.page.locator(
+                "[jsname='wZQ6P'], "
+                "[role='menuitem'][aria-label='Images'], "
+                "div[role='tabpanel'] [aria-label*='Images' i], "
+                "div[role='menuitem']:has-text('Images'), "
+                "[aria-label*='Images' i]"
             ).first
 
-            images_btn = None
-            if sidebar.count() > 0:
-                candidates = sidebar.locator(
-                    "div[role='button']", 
-                    has_text=re.compile(r"^\s*Images\s*$")
-                )
-                if candidates.count() > 0:
-                    images_btn = candidates.first
-
-            if not images_btn or images_btn.count() == 0:
-                images_btn = self.page.locator(
-                    "div[role='button']:has-text('Images'), [aria-label*='Images' i]"
-                ).first
+            try:
+                images_btn.scroll_into_view_if_needed(timeout=2000)
+            except Exception:
+                pass
 
             if images_btn and images_btn.count() > 0 and images_btn.is_visible():
                 images_btn.click(force=True)
-                self.page.wait_for_timeout(900)
+                self.page.wait_for_timeout(800)
 
                 upload_opt = self.page.locator(
-                    "div[role='menuitem']:has-text('Upload'), span:has-text('Upload')"
+                    "[role='menuitem']:has-text('Upload'), "
+                    "div[role='menu'] [role='menuitem']:has-text('Upload'), "
+                    "span:has-text('Upload'), "
+                    ".z80M1:has-text('Upload')"
                 ).last
+
                 try:
                     upload_opt.wait_for(state="visible", timeout=3000)
                 except Exception:
                     pass
 
-                with self.page.expect_file_chooser(timeout=8000) as fc_info:
-                    upload_opt.click(force=True)
-                file_chooser = fc_info.value
-                file_chooser.set_files(image_path)
-                self.page.wait_for_timeout(3000)
-                self.log(f"[SUCCESS] Image {os.path.basename(image_path)} uploaded.")
+                upload_success = False
+                try:
+                    with self.page.expect_file_chooser(timeout=8000) as fc_info:
+                        upload_opt.click(force=True)
+                    file_chooser = fc_info.value
+                    file_chooser.set_files(image_path)
+                    self.page.wait_for_timeout(3500)
+                    upload_success = True
+                    self.log(f"[SUCCESS] Image {os.path.basename(image_path)} uploaded.")
+                except Exception as fc_err:
+                    self.log(f"[IMAGE] File chooser notice: {fc_err}. Trying direct file input...")
 
-                if make_full_width:
+                if not upload_success:
+                    file_inputs = self.page.locator("input[type='file']")
+                    if file_inputs.count() > 0:
+                        try:
+                            file_inputs.last.set_input_files(image_path)
+                            self.page.wait_for_timeout(3500)
+                            upload_success = True
+                            self.log(f"[SUCCESS] Image {os.path.basename(image_path)} uploaded via file input fallback.")
+                        except Exception as fi_err:
+                            self.log(f"[IMAGE] File input fallback notice: {fi_err}")
+
+                if upload_success and make_full_width:
                     self.resize_image_to_full_width()
         except Exception as e:
             self.log(f"[IMAGE] Notice uploading single image: {e}")
